@@ -1,13 +1,18 @@
 from flask import Flask, request, jsonify
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Float, create_engine, func
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from marshmallow_sqlalchemy import SQLAlchemyAutoSchema
+from marshmallow import ValidationError
 import datetime
+import uuid
 
-# Initialize the database base
+# Initialize the database base and engine
 Base = declarative_base()
+engine = create_engine('mysql+mysqlconnector://root:music123@localhost/ecommerce_api2')
+Session = sessionmaker(bind=engine)
 
+# Models
 class User(Base):
     __tablename__ = 'users'
 
@@ -68,62 +73,154 @@ class ProductSchema(SQLAlchemyAutoSchema):
 # Initialize Flask app
 app = Flask(__name__)
 
-# Example data for testing
-todos = [
-    {'id': 1, 'task': 'Write code'},
-    {'id': 2, 'task': 'Read book'}
-]
+# Helper functions for CRUD operations
 
-# Utility function to find todo by id
-def find_todo_by_id(todo_id):
-    return next((item for item in todos if item['id'] == todo_id), None)
+def get_or_404(model, model_id, schema):
+    session = Session()
+    instance = session.query(model).get(model_id)
+    if instance is None:
+        return jsonify({"error": f"{model.__name__} not found"}), 404
+    return schema().dump(instance)
 
-@app.route('/')
-def home():
-    return 'Welcome to the API!'
+def get_all(model, schema):
+    session = Session()
+    instances = session.query(model).all()
+    return jsonify(schema(many=True).dump(instances))
 
-# Get all todos
-@app.route('/todos', methods=['GET'])
-def get_todos():
-    return jsonify(todos)
+def create_instance(model, data, schema):
+    session = Session()
+    try:
+        instance = schema().load(data, session=session)  # Marshmallow handles deserialization
+        session.add(instance)
+        session.commit()
+        return jsonify(schema().dump(instance)), 201
+    except ValidationError as err:
+        return jsonify(err.messages), 400
 
-# Get a single todo by ID
-@app.route('/todos/<int:id>', methods=['GET'])
-def get_todo(id):
-    todo = find_todo_by_id(id)
-    if todo:
-        return jsonify(todo)
-    return jsonify({'error': 'Todo not found'}), 404
+def update_instance(model, model_id, data, schema):
+    session = Session()
+    instance = session.query(model).get(model_id)
+    if not instance:
+        return jsonify({"error": f"{model.__name__} not found"}), 404
+    try:
+        schema().load(data, instance=instance, session=session)  # Marshmallow updates the instance
+        session.commit()
+        return jsonify(schema().dump(instance)), 200
+    except ValidationError as err:
+        return jsonify(err.messages), 400
 
-# Create a new todo
-@app.route('/todos', methods=['POST'])
-def add_todo():
-    new_todo = request.get_json()
-    todos.append(new_todo)
-    return jsonify(new_todo), 201
+def delete_instance(model, model_id):
+    session = Session()
+    instance = session.query(model).get(model_id)
+    if not instance:
+        return jsonify({"error": f"{model.__name__} not found"}), 404
+    session.delete(instance)
+    session.commit()
+    return jsonify({"message": f"{model.__name__} deleted"}), 200
 
-# Update an existing todo
-@app.route('/todos/<int:id>', methods=['PUT'])
-def update_todo(id):
-    todo = find_todo_by_id(id)
-    if todo:
-        data = request.get_json()
-        todo.update(data)
-        return jsonify(todo)
-    return jsonify({'error': 'Todo not found'}), 404
+# Routes for Users
+@app.route('/users', methods=['GET'])
+def get_users():
+    return get_all(User, UserSchema)
 
-# Delete a todo
-@app.route('/todos/<int:id>', methods=['DELETE'])
-def delete_todo(id):
-    global todos
-    todos = [todo for todo in todos if todo['id'] != id]
-    return jsonify({'message': 'Todo deleted successfully'}), 200
+@app.route('/users/<int:user_id>', methods=['GET'])
+def get_user(user_id):
+    return get_or_404(User, user_id, UserSchema)
+
+@app.route('/users', methods=['POST'])
+def create_user():
+    data = request.get_json()
+    return create_instance(User, data, UserSchema)
+
+@app.route('/users/<int:user_id>', methods=['PUT'])
+def update_user(user_id):
+    data = request.get_json()
+    return update_instance(User, user_id, data, UserSchema)
+
+@app.route('/users/<int:user_id>', methods=['DELETE'])
+def delete_user(user_id):
+    return delete_instance(User, user_id)
+
+# Routes for Products
+@app.route('/api/products', methods=['GET'])
+def get_products():
+    return get_all(Product, ProductSchema)
+
+@app.route('/api/products/<int:product_id>', methods=['GET'])
+def get_product(product_id):
+    return get_or_404(Product, product_id, ProductSchema)
+
+@app.route('/api/products', methods=['POST'])
+def create_product():
+    data = request.get_json()
+    return create_instance(Product, data, ProductSchema)
+
+@app.route('/api/products/<int:product_id>', methods=['PUT'])
+def update_product(product_id):
+    data = request.get_json()
+    return update_instance(Product, product_id, data, ProductSchema)
+
+@app.route('/api/products/<int:product_id>', methods=['DELETE'])
+def delete_product(product_id):
+    return delete_instance(Product, product_id)
+
+# Routes for Orders
+@app.route('/orders', methods=['GET'])
+def get_orders():
+    return get_all(Order, OrderSchema)
+
+@app.route('/orders', methods=['POST'])
+def create_order():
+    data = request.get_json()
+    if not data.get('customer_name') or not data.get('items'):
+        return jsonify({"error": "Missing customer_name or items"}), 400
+    order_id = str(uuid.uuid4())  # Generate a unique order ID
+    order = {
+        'id': order_id,
+        'customer_name': data['customer_name'],
+        'items': data['items'],
+        'status': 'pending'  # Default order status
+    }
+    orders[order_id] = order
+    return jsonify(order), 201
+
+@app.route('/orders/<order_id>', methods=['GET'])
+def get_order(order_id):
+    """Get a single order by its ID"""
+    order = orders.get(order_id)
+    if order is None:
+        return jsonify({"error": "Order not found"}), 404
+    return jsonify(order), 200
+
+@app.route('/orders/<order_id>', methods=['PUT'])
+def update_order(order_id):
+    """Update an existing order by its ID"""
+    order = orders.get(order_id)
+    if order is None:
+        return jsonify({"error": "Order not found"}), 404
+
+    data = request.get_json()
+
+    # Update the fields based on what was provided
+    if 'customer_name' in data:
+        order['customer_name'] = data['customer_name']
+    if 'items' in data:
+        order['items'] = data['items']
+    if 'status' in data:
+        order['status'] = data['status']
+
+    return jsonify(order), 200
+
+@app.route('/orders/<order_id>', methods=['DELETE'])
+def delete_order(order_id):
+    """Delete an order by its ID"""
+    order = orders.pop(order_id, None)
+    if order is None:
+        return jsonify({"error": "Order not found"}), 404
+    return jsonify({"message": "Order deleted"}), 200
+
 
 if __name__ == '__main__':
+    # Create tables in the database
+    Base.metadata.create_all(engine)
     app.run(debug=True)
-
-# Database engine for SQLAlchemy
-engine = create_engine('mysql+mysqlconnector://root:music123@localhost/ecommerce_api2')
-
-# Create tables in the database
-Base.metadata.create_all(engine)
