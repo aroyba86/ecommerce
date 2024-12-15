@@ -64,136 +64,141 @@ class ProductSchema(SQLAlchemyAutoSchema):
 # Initialize Flask app
 app = Flask(__name__)
 
-# Helper function for getting a single instance or returning 404
-def get_instance_or_404(model, model_id, schema):
-    session = Session()
-    instance = session.query(model).get(model_id)
-    if not instance:
-        return jsonify({"error": f"{model.__name__} not found"}), 404
-    return schema().dump(instance)
+# Helper function to manage session context
+def get_session():
+    return Session()
 
-# Helper function for getting all instances
-def get_all_instances(model, schema):
-    session = Session()
-    instances = session.query(model).all()
-    return jsonify(schema(many=True).dump(instances))
+# Generic function for GET or 404
+def get_connection_or_404(model, model_id, schema):
+    with get_session() as session:
+        connection = session.query(model).get(model_id)
+        if not connection:
+            return jsonify({"error": f"{model.__name__} not found"}), 404
+        return jsonify(schema().dump(connection))
 
-# Helper function for creating an instance
-def create_instance(model, data, schema):
-    session = Session()
-    try:
-        instance = schema().load(data, session=session)
-        session.add(instance)
+# Generic function for getting all instances
+def get_all_connections(model, schema):
+    with get_session() as session:
+        connections = session.query(model).all()
+        return jsonify(schema(many=True).dump(connections))
+
+# Generic function for creating an instance
+def create_connection(model, data, schema):
+    with get_session() as session:
+        try:
+            connection = schema().load(data, session=session)
+            session.add(connection)
+            session.commit()
+            return jsonify(schema().dump(connection)), 201
+        except ValidationError as err:
+            return jsonify(err.messages), 400
+
+# Generic function for updating an instance
+def update_connection(model, model_id, data, schema):
+    with get_session() as session:
+        object = session.query(model).get(model_id)
+        if not connection:
+            return jsonify({"error": f"{model.__name__} not found"}), 404
+        try:
+            schema().load(data, connection=object, session=session)
+            session.commit()
+            return jsonify(schema().dump(connection)), 200
+        except ValidationError as err:
+            return jsonify(err.messages), 400
+
+# Generic function for deleting an instance
+def delete_connection(model, model_id):
+    with get_session() as session:
+        connection = session.query(model).get(model_id)
+        if not connection:
+            return jsonify({"error": f"{model.__name__} not found"}), 404
+        session.delete(connection)
         session.commit()
-        return jsonify(schema().dump(instance)), 201
-    except ValidationError as err:
-        return jsonify(err.messages), 400
-
-# Helper function for updating an instance
-def update_instance(model, model_id, data, schema):
-    session = Session()
-    instance = session.query(model).get(model_id)
-    if not instance:
-        return jsonify({"error": f"{model.__name__} not found"}), 404
-    try:
-        schema().load(data, instance=instance, session=session)
-        session.commit()
-        return jsonify(schema().dump(instance)), 200
-    except ValidationError as err:
-        return jsonify(err.messages), 400
-
-# Helper function for deleting an instance
-def delete_instance(model, model_id):
-    session = Session()
-    instance = session.query(model).get(model_id)
-    if not instance:
-        return jsonify({"error": f"{model.__name__} not found"}), 404
-    session.delete(instance)
-    session.commit()
-    return jsonify({"message": f"{model.__name__} deleted"}), 200
+        return jsonify({"message": f"{model.__name__} deleted"}), 200
 
 # Routes for Users
 @app.route('/users', methods=['GET'])
 def get_users():
-    return get_all_instances(User, UserSchema)
+    return get_all_connections(User, UserSchema)
 
 @app.route('/users/<int:user_id>', methods=['GET'])
 def get_user(user_id):
-    return get_instance_or_404(User, user_id, UserSchema)
+    return get_connection_or_404(User, user_id, UserSchema)
 
 @app.route('/users', methods=['POST'])
 def create_user():
     data = request.get_json()
-    return create_instance(User, data, UserSchema)
+    return create_connection(User, data, UserSchema)
 
 @app.route('/users/<int:user_id>', methods=['PUT'])
 def update_user(user_id):
     data = request.get_json()
-    return update_instance(User, user_id, data, UserSchema)
+    return update_connection(User, user_id, data, UserSchema)
 
 @app.route('/users/<int:user_id>', methods=['DELETE'])
 def delete_user(user_id):
-    return delete_instance(User, user_id)
+    return delete_connection(User, user_id)
 
 # Routes for Products
-@app.route('/api/products', methods=['GET'])
+@app.route('/products', methods=['GET'])
 def get_products():
-    return get_all_instances(Product, ProductSchema)
+    return get_all_connections(Product, ProductSchema)
 
-@app.route('/api/products/<int:product_id>', methods=['GET'])
+@app.route('/products/<int:product_id>', methods=['GET'])
 def get_product(product_id):
-    return get_instance_or_404(Product, product_id, ProductSchema)
+    return get_connection_or_404(Product, product_id, ProductSchema)
 
-@app.route('/api/products', methods=['POST'])
+@app.route('/products', methods=['POST'])
 def create_product():
     data = request.get_json()
-    return create_instance(Product, data, ProductSchema)
+    return create_connection(Product, data, ProductSchema)
 
-@app.route('/api/products/<int:product_id>', methods=['PUT'])
+@app.route('/products/<int:product_id>', methods=['PUT'])
 def update_product(product_id):
     data = request.get_json()
-    return update_instance(Product, product_id, data, ProductSchema)
+    return update_connection(Product, product_id, data, ProductSchema)
 
-@app.route('/api/products/<int:product_id>', methods=['DELETE'])
+@app.route('/products/<int:product_id>', methods=['DELETE'])
 def delete_product(product_id):
-    return delete_instance(Product, product_id)
+    return delete_connection(Product, product_id)
 
 # Routes for Orders
 @app.route('/orders', methods=['GET'])
 def get_orders():
-    return get_all_instances(Order, OrderSchema)
+    return get_all_connections(Order, OrderSchema)
 
 @app.route('/orders', methods=['POST'])
 def create_order():
     data = request.get_json()
     if not data.get('user_id') or not data.get('product_ids'):
         return jsonify({"error": "Missing user_id or product_ids"}), 400
-    session = Session()
-    order = Order(user_id=data['user_id'])
-    session.add(order)
-    session.commit()
-    
-    # Associate products with order
-    for product_id in data['product_ids']:
-        product = session.query(Product).get(product_id)
-        if product:
-            order.products.append(product)
-    session.commit()
 
-    return jsonify(OrderSchema().dump(order)), 201
+    with get_session() as session:
+        order = Order(user_id=data['user_id'])
+        session.add(order)
+        session.commit()
+
+        products = session.query(Product).filter(Product.id.in_(data['product_ids'])).all()
+        if not products:
+            return jsonify({"error": "Some products not found"}), 404
+
+        order.products.extend(products)
+        session.commit()
+
+        return jsonify(OrderSchema().dump(order)), 201
 
 @app.route('/orders/<int:order_id>', methods=['GET'])
 def get_order(order_id):
-    return get_instance_or_404(Order, order_id, OrderSchema)
+    return get_connection_or_404(Order, order_id, OrderSchema)
 
 @app.route('/orders/<int:order_id>', methods=['PUT'])
 def update_order(order_id):
     data = request.get_json()
-    return update_instance(Order, order_id, data, OrderSchema)
+    return update_connection(Order, order_id, data, OrderSchema)
 
 @app.route('/orders/<int:order_id>', methods=['DELETE'])
 def delete_order(order_id):
-    return delete_instance(Order, order_id)
+    return delete_connection(Order, order_id)
 
 # Error handling
 @app.errorhandler(400)
